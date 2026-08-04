@@ -1,0 +1,20 @@
+services:
+  savelycloud:
+    build: .
+    container_name: savelycloud
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      MAX_STORAGE: ${MAX_STORAGE:-20GB}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-2GB}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://127.0.0.1:8787/api/connections/google/callback}
+    volumes:
+      - savelycloud-storage:/app/storage
+      - savelycloud-data:/app/data
+
+volumes:
+  savelycloud-storage:
+  savelycloud-data:

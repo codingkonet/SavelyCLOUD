@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f2ea">
+  <title>SavelyCLOUD — Your files, at home</title>
+  <link rel="stylesheet" href="/styles.css?v=8">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <button class="brand" id="brand-button" type="button" aria-label="SavelyCLOUD home">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
+        <span>SavelyCLOUD</span>
+      </button>
+
+      <nav class="guest-actions" id="guest-actions" aria-label="Account">
+        <button class="text-button" id="sign-in-button" type="button">Sign in</button>
+        <button class="button primary" id="create-account-button" type="button">Create account</button>
+      </nav>
+
+      <div class="app-actions" id="app-actions" hidden>
+        <button class="button ghost" id="new-folder-button" type="button">New folder</button>
+        <label class="button primary" id="local-upload-label" for="file-input">Upload files</label>
+        <input id="file-input" type="file" multiple hidden>
+        <button class="account-chip" id="account-button" type="button" aria-haspopup="true" aria-expanded="false">
+          <span class="avatar" id="avatar">LC</span>
+          <span class="account-copy"><strong id="account-name">Account</strong><small id="account-email"></small></span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+        <div class="account-menu" id="account-menu" hidden>
+          <button id="admin-panel-button" type="button" hidden>Admin panel</button>
+          <button id="sign-out-button" type="button">Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="home-view" id="home-view">
+        <div class="home-hero">
+          <div class="home-copy">
+            <p class="eyebrow">Private by design</p>
+            <h1>Your corner<br>of the cloud.</h1>
+            <p class="intro">Keep the files that matter close. SavelyCLOUD gives you a simple, private home for photos, documents, and everything in between.</p>
+            <div class="hero-actions">
+              <button class="button primary large" id="hero-create-account" type="button">Create your account <span aria-hidden="true">→</span></button>
+              <button class="button quiet large" id="hero-sign-in" type="button">I already have an account</button>
+            </div>
+            <p class="privacy-note"><span aria-hidden="true">●</span> Stored on this computer. Never sent to a third party.</p>
+          </div>
+
+          <div class="cloud-preview" aria-label="Preview of SavelyCLOUD">
+            <div class="preview-glow"></div>
+            <div class="preview-window">
+              <div class="preview-top"><span class="preview-logo"><i></i></span><span>My files</span><b>•••</b></div>
+              <div class="preview-folders">
+                <div class="preview-item"><span class="preview-icon folder-icon">▱</span><span><strong>Family photos</strong><small>128 items</small></span></div>
+                <div class="preview-item"><span class="preview-icon document-icon">◇</span><span><strong>Documents</strong><small>42 items</small></span></div>
+                <div class="preview-item"><span class="preview-icon music-icon">♫</span><span><strong>Music</strong><small>316 items</small></span></div>
+              </div>
+              <div class="preview-storage"><div><span>Storage</span><small>Private and local</small></div><span class="preview-check">✓</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="trust-row">
+          <article><span class="feature-number">01</span><div><h2>Truly yours</h2><p>Your files stay on your own server and under your control.</p></div></article>
+          <article><span class="feature-number">02</span><div><h2>Made for everyone</h2><p>Each account has its own private, separate file space.</p></div></article>
+          <article><span class="feature-number">03</span><div><h2>Simple on purpose</h2><p>Upload, organize, search, and download without the clutter.</p></div></article>
+        </div>
+      </section>
+
+      <section class="dashboard-view" id="dashboard-view" hidden>
+        <div class="dashboard-hero">
+          <div>
+            <p class="eyebrow">Welcome home</p>
+            <h1 id="welcome-title">Your files.</h1>
+            <p class="intro">Everything you save here belongs only to your account.</p>
+          </div>
+          <div class="storage-card">
+            <div class="storage-head"><span>Storage</span><span id="storage-percent">—</span></div>
+            <div class="meter"><span id="storage-meter"></span></div>
+            <p id="storage-copy">Loading storage information…</p>
+          </div>
+        </div>
+
+        <nav class="storage-nav" aria-label="Storage location">
+          <button class="storage-tab active" id="local-storage-tab" type="button"><span aria-hidden="true">⌂</span> Local files</button>
+          <button class="storage-tab" id="connected-storage-tab" type="button"><span aria-hidden="true">↗</span> Connected storage</button>
+        </nav>
+
+        <section class="browser" id="local-storage-panel" aria-label="File browser">
+          <div class="browser-head">
+            <nav class="breadcrumbs" id="breadcrumbs" aria-label="Breadcrumb"></nav>
+            <label class="search">
+              <span aria-hidden="true">⌕</span>
+              <input id="search-input" type="search" placeholder="Search this folder" aria-label="Search this folder">
+            </label>
+          </div>
+          <div class="drop-zone" id="drop-zone">
+            <div class="table-head"><span>Name</span><span>Size</span><span>Modified</span><span></span></div>
+            <div id="file-list" class="file-list" aria-live="polite"></div>
+            <div id="empty-state" class="empty-state" hidden>
+              <span class="empty-icon" aria-hidden="true">＋</span>
+              <h2>This folder is empty</h2>
+              <p>Drop files here or use the upload button.</p>
+            </div>
+            <div class="drop-overlay"><strong>Drop to upload</strong><span>Files will be saved in this folder</span></div>
+          </div>
+        </section>
+
+        <section class="connections-panel" id="connections-panel" hidden>
+          <div class="connections-head">
+            <div><p class="eyebrow">Your other clouds</p><h2>Connected storage</h2><p>Browse and move files across the services you already use.</p></div>
+            <button class="button primary" id="add-connection-button" type="button">＋ Add storage</button>
+          </div>
+          <div class="connection-grid" id="connection-grid"></div>
+          <div class="connections-empty" id="connections-empty" hidden>
+            <span class="orbit-icon" aria-hidden="true"><i></i></span>
+            <h3>Bring your storage together</h3>
+            <p>Connect a WebDAV or S3-compatible service to browse it from SavelyCLOUD.</p>
+            <button class="button primary" id="empty-add-connection" type="button">Connect a service</button>
+          </div>
+        </section>
+
+        <section class="remote-panel" id="remote-panel" hidden>
+          <div class="remote-toolbar">
+            <button class="back-button" id="remote-back" type="button">← All connections</button>
+            <div class="remote-actions">
+              <button class="button ghost" id="remote-new-folder" type="button">New folder</button>
+              <label class="button primary" for="remote-file-input">Upload here</label>
+              <input id="remote-file-input" type="file" multiple hidden>
+            </div>
+          </div>
+          <section class="browser" aria-label="Connected storage browser">
+            <div class="browser-head">
+              <nav class="breadcrumbs" id="remote-breadcrumbs" aria-label="Connected storage breadcrumb"></nav>
+              <span class="provider-badge" id="remote-provider-badge"></span>
+            </div>
+            <div class="drop-zone" id="remote-drop-zone">
+              <div class="table-head"><span>Name</span><span>Size</span><span>Modified</span><span></span></div>
+              <div id="remote-file-list" class="file-list" aria-live="polite"></div>
+              <div id="remote-empty" class="empty-state" hidden><span class="empty-icon" aria-hidden="true">＋</span><h2>This folder is empty</h2><p>Upload a file or create a folder here.</p></div>
+              <div class="drop-overlay"><strong>Drop to upload</strong><span>Files will be sent to this connected service</span></div>
+            </div>
+          </section>
+        </section>
+      </section>
+
+      <section class="admin-view" id="admin-view" hidden>
+        <div class="admin-titlebar">
+          <div><p class="eyebrow">Administration</p><h1>Control center.</h1><p class="intro">Manage accounts, storage limits, and files across SavelyCLOUD.</p></div>
+          <button class="button ghost" id="admin-exit-button" type="button">← Back to my files</button>
+        </div>
+
+        <div id="admin-overview-panel">
+          <div class="metric-grid">
+            <article><span>Users</span><strong id="admin-user-count">—</strong><small id="admin-active-count">Loading…</small></article>
+            <article><span>Stored files</span><strong id="admin-file-count">—</strong><small>Across all local accounts</small></article>
+            <article><span>Storage used</span><strong id="admin-storage-used">—</strong><small>Local account storage</small></article>
+            <article><span>Connections</span><strong id="admin-connection-count">—</strong><small>Linked online services</small></article>
+          </div>
+          <section class="admin-card">
+            <div class="admin-card-head"><div><h2>User accounts</h2><p>Review usage and manage access.</p></div><button class="button ghost" id="admin-refresh" type="button">Refresh</button></div>
+            <div class="admin-user-table">
+              <div class="admin-user-head"><span>User</span><span>Usage</span><span>Status</span><span></span></div>
+              <div id="admin-user-list"></div>
+            </div>
+          </section>
+        </div>
+
+        <section id="admin-user-detail" hidden>
+          <button class="back-button" id="admin-users-back" type="button">← All users</button>
+          <div class="managed-user-head">
+            <div class="managed-identity"><span class="avatar large-avatar" id="managed-avatar">U</span><div><p class="eyebrow">Managed account</p><h2 id="managed-name">User</h2><p id="managed-email"></p></div></div>
+            <div class="managed-actions"><button class="button ghost" id="managed-suspend" type="button">Suspend account</button><button class="button danger" id="managed-delete" type="button">Delete account</button></div>
+          </div>
+          <div class="managed-settings">
+            <label>Role<select id="managed-role"><option value="user">User</option><option value="admin">Administrator</option></select></label>
+            <label>Storage limit (GB)<input id="managed-quota" type="number" min="0.001" max="1048576" step="0.1"></label>
+            <button class="button primary" id="managed-save" type="button">Save settings</button>
+            <p id="managed-usage"></p>
+          </div>
+          <section class="browser admin-files" aria-label="Managed user files">
+            <div class="browser-head"><nav class="breadcrumbs" id="admin-breadcrumbs" aria-label="Managed user breadcrumb"></nav><span class="provider-badge">Local files</span></div>
+            <div class="drop-zone"><div class="table-head"><span>Name</span><span>Size</span><span>Modified</span><span></span></div><div id="admin-file-list" class="file-list"></div><div id="admin-files-empty" class="empty-state" hidden><span class="empty-icon">◇</span><h2>No files here</h2><p>This account has not stored anything in this folder.</p></div></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-brand"><span class="brand-mark" aria-hidden="true"><span></span></span><div><strong>SavelyCLOUD</strong><small>Your files. Your server. Your rules.</small></div></div>
+      <p>© <span id="copyright-year">2026</span> SavelyCLOUD. All rights reserved.</p>
+      <p class="footer-status"><span></span> Private and locally hosted</p>
+    </footer>
+  </div>
+
+  <dialog class="auth-dialog" id="auth-dialog">
+    <button class="dialog-close" id="auth-close" type="button" aria-label="Close">×</button>
+    <div class="auth-intro">
+      <span class="brand-mark large-mark" aria-hidden="true"><span></span></span>
+      <p class="eyebrow" id="auth-eyebrow">Start your private cloud</p>
+      <h2 id="auth-title">Create your account</h2>
+      <p id="auth-subtitle">A private space for your files, right here.</p>
+    </div>
+    <form id="auth-form">
+      <label id="name-field">Your name<input id="auth-name" name="name" autocomplete="name" maxlength="80" placeholder="Alex Morgan"></label>
+      <label>Email address<input id="auth-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="alex@example.com"></label>
+      <label>Password<input id="auth-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required placeholder="At least 8 characters"></label>
+      <p class="form-error" id="auth-error" role="alert" hidden></p>
+      <button class="button primary auth-submit" id="auth-submit" type="submit">Create account</button>
+    </form>
+    <p class="auth-switch"><span id="auth-switch-copy">Already have an account?</span> <button id="auth-switch" type="button">Sign in</button></p>
+  </dialog>
+
+  <dialog id="folder-dialog">
+    <form method="dialog" id="folder-form">
+      <div class="dialog-head"><h2>Create a folder</h2><button value="cancel" aria-label="Close">×</button></div>
+      <label>Folder name<input id="folder-name" autocomplete="off" required maxlength="120" placeholder="e.g. Project files"></label>
+      <div class="dialog-actions"><button class="button ghost" value="cancel">Cancel</button><button class="button primary" value="default">Create folder</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="connection-dialog" id="connection-dialog">
+    <button class="dialog-close" id="connection-close" type="button" aria-label="Close">×</button>
+    <div class="connection-dialog-head">
+      <p class="eyebrow">Connected storage</p>
+      <h2>Add a storage service</h2>
+      <p>Your credentials are encrypted before they are saved locally.</p>
+    </div>
+    <form id="connection-form">
+      <label>Connection name<input id="connection-name" required maxlength="60" placeholder="My archive"></label>
+      <label>Service type
+        <select id="connection-provider">
+          <option value="supabase">Supabase Storage &mdash; project bucket</option>
+          <option value="google">Google Drive — connect with Google</option>
+          <option value="webdav">WebDAV — Nextcloud, ownCloud, Koofr</option>
+          <option value="s3">S3-compatible — AWS, R2, B2, MinIO</option>
+        </select>
+      </label>
+      <div class="google-connect-note" id="google-fields">
+        <span class="google-drive-mark" aria-hidden="true"><i></i><b></b></span>
+        <div><strong>Continue securely with Google</strong><p>You’ll be sent to Google to approve access. SavelyCLOUD never sees your Google password.</p></div>
+      </div>
+      <div id="webdav-fields" hidden>
+        <label>WebDAV URL<input id="webdav-url" type="url" placeholder="https://cloud.example.com/remote.php/dav/files/alex/"></label>
+        <div class="form-columns"><label>Username<input id="webdav-username" autocomplete="username"></label><label>Password / app password<input id="webdav-password" type="password" autocomplete="new-password"></label></div>
+      </div>
+      <div id="s3-fields" hidden>
+        <label>Endpoint URL<input id="s3-endpoint" type="url" placeholder="https://s3.us-east-1.amazonaws.com"></label>
+        <div class="form-columns"><label>Region<input id="s3-region" value="us-east-1"></label><label>Bucket<input id="s3-bucket" placeholder="my-bucket"></label></div>
+        <label>Folder prefix <span>(optional)</span><input id="s3-prefix" placeholder="backups"></label>
+        <div class="form-columns"><label>Access key ID<input id="s3-access-key" autocomplete="off"></label><label>Secret access key<input id="s3-secret-key" type="password" autocomplete="new-password"></label></div>
+      </div>
+      <div id="supabase-fields">
+        <div class="supabase-connect-note"><span aria-hidden="true">S</span><div><strong>Connect a Supabase Storage bucket</strong><p>Use server-side S3 access keys from your Supabase Storage settings. Keys are encrypted locally and are never sent to the browser again.</p></div></div>
+        <div class="form-columns"><label>Project reference<input id="supabase-project-ref" placeholder="abcdefghijklmnopqrst"></label><label>Region<input id="supabase-region" value="us-east-1"></label></div>
+        <div class="form-columns"><label>Bucket<input id="supabase-bucket" placeholder="documents"></label><label>Folder prefix <span>(optional)</span><input id="supabase-prefix" placeholder="savelycloud"></label></div>
+        <div class="form-columns"><label>Access key ID<input id="supabase-access-key" autocomplete="off"></label><label>Secret access key<input id="supabase-secret-key" type="password" autocomplete="new-password"></label></div>
+      </div>
+      <p class="form-error" id="connection-error" role="alert" hidden></p>
+      <button class="button primary connection-submit" id="connection-submit" type="submit">Connect storage</button>
+    </form>
+  </dialog>
+
+  <dialog class="google-settings-dialog" id="google-settings-dialog">
+    <button class="dialog-close" id="google-settings-close" type="button" aria-label="Close">×</button>
+    <div class="connection-dialog-head">
+      <p class="eyebrow">Google Drive</p>
+      <h2>Connection settings</h2>
+      <p>Update how this Google Drive appears or renew its authorization.</p>
+    </div>
+    <form id="google-settings-form">
+      <div class="connected-account-box"><span class="google-drive-mark" aria-hidden="true"><i></i><b></b></span><div><small>Connected Google account</small><strong id="google-settings-email">Unknown account</strong></div></div>
+      <label>Connection name<input id="google-settings-name" required maxlength="60"></label>
+      <p class="form-error" id="google-settings-error" role="alert" hidden></p>
+      <div class="google-settings-actions">
+        <button class="button ghost" id="google-refresh-info" type="button">Refresh account info</button>
+        <button class="button ghost" id="google-reconnect" type="button">Reconnect account</button>
+        <button class="button primary" type="submit">Save name</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="connection-dialog" id="supabase-settings-dialog">
+    <button class="dialog-close" id="supabase-settings-close" type="button" aria-label="Close">&times;</button>
+    <div class="connection-dialog-head">
+      <p class="eyebrow">Supabase Storage</p>
+      <h2>Connection settings</h2>
+      <p>Update the bucket connection. Leave both key fields empty to keep the saved encrypted credentials.</p>
+    </div>
+    <form id="supabase-settings-form">
+      <label>Connection name<input id="supabase-settings-name" required maxlength="60"></label>
+      <div class="form-columns"><label>Project reference<input id="supabase-settings-project-ref" required></label><label>Region<input id="supabase-settings-region" required></label></div>
+      <div class="form-columns"><label>Bucket<input id="supabase-settings-bucket" required></label><label>Folder prefix <span>(optional)</span><input id="supabase-settings-prefix"></label></div>
+      <div class="form-columns"><label>New access key ID <span>(optional)</span><input id="supabase-settings-access-key" autocomplete="off"></label><label>New secret access key <span>(optional)</span><input id="supabase-settings-secret-key" type="password" autocomplete="new-password"></label></div>
+      <p class="form-error" id="supabase-settings-error" role="alert" hidden></p>
+      <div class="google-settings-actions"><button class="button primary" type="submit">Test and save</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="remote-folder-dialog">
+    <form method="dialog" id="remote-folder-form">
+      <div class="dialog-head"><h2>Create remote folder</h2><button value="cancel" aria-label="Close">×</button></div>
+      <label>Folder name<input id="remote-folder-name" autocomplete="off" required maxlength="120" placeholder="e.g. Shared files"></label>
+      <div class="dialog-actions"><button class="button ghost" value="cancel">Cancel</button><button class="button primary" value="default">Create folder</button></div>
+    </form>
+  </dialog>
+
+  <div class="upload-panel" id="upload-panel" hidden>
+    <div><strong id="upload-title">Uploading…</strong><span id="upload-detail"></span></div>
+    <div class="upload-meter"><span id="upload-meter"></span></div>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script type="module" src="/app.js?v=8"></script>
+</body>
+</html>

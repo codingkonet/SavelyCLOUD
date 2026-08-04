@@ -1,0 +1,7 @@
+storage/
+.local-cloud-data/
+*.log
+.env
+.DS_Store
+Thumbs.db
+

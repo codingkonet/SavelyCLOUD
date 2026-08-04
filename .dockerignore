@@ -1,0 +1,7 @@
+.git
+.gitignore
+.local-cloud-data
+storage
+test
+*.log
+README.md
