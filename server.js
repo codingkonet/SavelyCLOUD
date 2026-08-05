@@ -28,13 +28,14 @@ const USERS_ROOT = path.join(STORAGE_ROOT, 'accounts');
 const ACCOUNTS_FILE = path.join(DATA_ROOT, 'accounts.json');
 const CONNECTIONS_FILE = path.join(DATA_ROOT, 'connections.json');
 const ENCRYPTION_KEY_FILE = path.join(DATA_ROOT, 'encryption.key');
+const SYSTEM_SETTINGS_FILE = path.join(DATA_ROOT, 'system-settings.json');
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parsePort(process.env.PORT || '8787');
 const MAX_FILE_BYTES = parseSize(process.env.MAX_FILE_SIZE || '2GB');
 const MAX_STORAGE_BYTES = parseSize(process.env.MAX_STORAGE || '20GB');
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `http://127.0.0.1:${PORT}/api/connections/google/callback`;
+const ENV_GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const ENV_GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const ENV_GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `http://127.0.0.1:${PORT}/api/connections/google/callback`;
 const GOOGLE_AUTH_URL = process.env.GOOGLE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
 const GOOGLE_DRIVE_API_URL = process.env.GOOGLE_DRIVE_API_URL || 'https://www.googleapis.com/drive/v3';
@@ -66,6 +67,7 @@ await mkdir(USERS_ROOT, { recursive: true });
 let accounts = await loadAccounts();
 let connections = await loadConnections();
 const encryptionKey = await loadEncryptionKey();
+let systemSettings = await loadSystemSettings();
 const sessions = new Map();
 const googleOAuthStates = new Map();
 
@@ -116,6 +118,8 @@ const server = http.createServer(async (request, response) => {
         requireAdmin(user);
         if (request.method === 'GET' && url.pathname === '/api/admin/overview') return await adminOverview(response);
         if (request.method === 'GET' && url.pathname === '/api/admin/users') return await adminUsers(response);
+        if (request.method === 'GET' && url.pathname === '/api/admin/settings') return adminSystemSettings(response);
+        if (request.method === 'PATCH' && url.pathname === '/api/admin/settings') return await updateAdminSystemSettings(request, response);
         const adminUserRoute = /^\/api\/admin\/users\/([a-f0-9-]+)(?:\/(files|download))?$/.exec(url.pathname);
         if (adminUserRoute) {
           const targetUser = getAccount(adminUserRoute[1]);
@@ -303,6 +307,43 @@ async function adminUsers(response) {
   return json(response, 200, { users: managedUsers });
 }
 
+function adminSystemSettings(response) {
+  const google = googleOAuthConfig();
+  return json(response, 200, {
+    google: {
+      clientId: google.clientId,
+      redirectUri: google.redirectUri,
+      clientSecretConfigured: Boolean(google.clientSecret),
+      source: systemSettings.google ? 'dashboard' : 'environment',
+    },
+  });
+}
+
+async function updateAdminSystemSettings(request, response) {
+  const body = await readJson(request);
+  if (!body.google || typeof body.google !== 'object' || Array.isArray(body.google)) {
+    throw httpError(400, 'Google Drive settings are required.');
+  }
+  const current = googleOAuthConfig();
+  const clientId = requireString(body.google.clientId, 'Google client ID', 500);
+  const redirectUri = validateGoogleRedirectUri(body.google.redirectUri);
+  const newSecret = typeof body.google.clientSecret === 'string' ? body.google.clientSecret.trim() : '';
+  const clientSecret = newSecret || current.clientSecret;
+  if (!clientSecret) throw httpError(400, 'Google client secret is required for the first dashboard configuration.');
+  const previousEncryptedSecret = systemSettings.google?.encryptedClientSecret;
+  systemSettings = {
+    ...systemSettings,
+    google: {
+      clientId,
+      redirectUri,
+      encryptedClientSecret: newSecret ? encryptSecret({ clientSecret }) : previousEncryptedSecret,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  await saveSystemSettings();
+  return adminSystemSettings(response);
+}
+
 async function updateManagedUser(request, response, admin, targetUser) {
   const body = await readJson(request);
   if (body.status !== undefined) {
@@ -366,8 +407,9 @@ function userStorageLimit(user) {
 }
 
 function startGoogleOAuth(response, user, requestedName, replacementId = '') {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-    throw httpError(503, 'Google Drive is not configured. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then restart SavelyCLOUD.');
+  const googleConfig = googleOAuthConfig();
+  if (!googleConfig.clientId || !googleConfig.clientSecret) {
+    throw httpError(503, 'Google Drive is not configured. An administrator can add its OAuth credentials in Admin panel > System settings.');
   }
   const name = typeof requestedName === 'string' ? requestedName.trim() : '';
   if (name.length < 2 || name.length > 60) throw httpError(400, 'Connection name must be between 2 and 60 characters.');
@@ -379,11 +421,11 @@ function startGoogleOAuth(response, user, requestedName, replacementId = '') {
   const state = crypto.randomBytes(32).toString('base64url');
   const verifier = crypto.randomBytes(48).toString('base64url');
   const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-  googleOAuthStates.set(state, { userId: user.id, name, replacementId, verifier, expiresAt: Date.now() + 10 * 60 * 1000 });
+  googleOAuthStates.set(state, { userId: user.id, name, replacementId, verifier, googleConfig, expiresAt: Date.now() + 10 * 60 * 1000 });
   const authorizationUrl = new URL(GOOGLE_AUTH_URL);
   authorizationUrl.search = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: GOOGLE_REDIRECT_URI,
+    client_id: googleConfig.clientId,
+    redirect_uri: googleConfig.redirectUri,
     response_type: 'code',
     scope: GOOGLE_DRIVE_SCOPE,
     access_type: 'offline',
@@ -409,14 +451,15 @@ async function finishGoogleOAuth(response, url) {
   if (!user) return redirect(response, '/?google=account-unavailable');
 
   try {
+    const googleConfig = pending.googleConfig || googleOAuthConfig();
     const tokenResponse = await fetch(GOOGLE_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code,
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        redirect_uri: GOOGLE_REDIRECT_URI,
+        client_id: googleConfig.clientId,
+        client_secret: googleConfig.clientSecret,
+        redirect_uri: googleConfig.redirectUri,
         grant_type: 'authorization_code',
         code_verifier: pending.verifier,
       }),
@@ -691,6 +734,33 @@ async function saveConnections() {
   await rename(tempFile, CONNECTIONS_FILE);
 }
 
+async function loadSystemSettings() {
+  try {
+    const data = JSON.parse(await readFile(SYSTEM_SETTINGS_FILE, 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw new Error(`Could not load system settings: ${error.message}`);
+  }
+}
+
+async function saveSystemSettings() {
+  const tempFile = `${SYSTEM_SETTINGS_FILE}.${crypto.randomUUID()}.tmp`;
+  await writeFile(tempFile, JSON.stringify({ version: 1, ...systemSettings }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await rename(tempFile, SYSTEM_SETTINGS_FILE);
+}
+
+function googleOAuthConfig() {
+  const dashboard = systemSettings.google || {};
+  let clientSecret = ENV_GOOGLE_CLIENT_SECRET;
+  if (dashboard.encryptedClientSecret) clientSecret = decryptSecret(dashboard.encryptedClientSecret).clientSecret || '';
+  return {
+    clientId: dashboard.clientId || ENV_GOOGLE_CLIENT_ID,
+    clientSecret,
+    redirectUri: dashboard.redirectUri || ENV_GOOGLE_REDIRECT_URI,
+  };
+}
+
 async function loadEncryptionKey() {
   try {
     const encoded = (await readFile(ENCRYPTION_KEY_FILE, 'utf8')).trim();
@@ -920,12 +990,16 @@ async function googleDriveAccessToken(connection, forceRefresh = false) {
   const secret = decryptSecret(connection.encryptedSecret);
   if (!forceRefresh && secret.accessToken && Number(secret.expiresAt) > Date.now() + 60_000) return secret.accessToken;
   if (!secret.refreshToken) throw new Error('Google Drive authorization expired. Unlink and reconnect the service.');
+  const googleConfig = googleOAuthConfig();
+  if (!googleConfig.clientId || !googleConfig.clientSecret) {
+    throw httpError(503, 'Google Drive OAuth settings are missing. Ask an administrator to configure them in the Admin panel.');
+  }
   const refresh = await fetch(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      client_secret: GOOGLE_CLIENT_SECRET,
+      client_id: googleConfig.clientId,
+      client_secret: googleConfig.clientSecret,
       refresh_token: secret.refreshToken,
       grant_type: 'refresh_token',
     }),
@@ -1044,6 +1118,22 @@ function normalizeProviderUrl(value, trailingSlash) {
   if (trailingSlash && !url.pathname.endsWith('/')) url.pathname += '/';
   if (!trailingSlash) url.pathname = url.pathname.replace(/\/$/, '');
   return url.toString().replace(/\/$/, trailingSlash ? '/' : '');
+}
+
+function validateGoogleRedirectUri(value) {
+  const raw = requireString(value, 'Google redirect URI', 2048);
+  let url;
+  try { url = new URL(raw); }
+  catch { throw httpError(400, 'Enter a valid Google redirect URI.'); }
+  const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && localHost)) {
+    throw httpError(400, 'Google redirect URI must use HTTPS, except for localhost development.');
+  }
+  if (url.username || url.password || url.search || url.hash) throw httpError(400, 'Google redirect URI cannot contain credentials, a query, or a fragment.');
+  if (url.pathname !== '/api/connections/google/callback') {
+    throw httpError(400, 'Google redirect URI must end with /api/connections/google/callback.');
+  }
+  return url.toString();
 }
 
 function supabaseStorageConfig(body, current = {}) {

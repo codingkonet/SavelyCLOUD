@@ -32,6 +32,14 @@ const elements = {
   adminFileCount: $('#admin-file-count'),
   adminStorageUsed: $('#admin-storage-used'),
   adminConnectionCount: $('#admin-connection-count'),
+  googleSystemSettingsForm: $('#google-system-settings-form'),
+  googleSystemClientId: $('#google-system-client-id'),
+  googleSystemClientSecret: $('#google-system-client-secret'),
+  googleSystemRedirectUri: $('#google-system-redirect-uri'),
+  googleSystemSecretStatus: $('#google-system-secret-status'),
+  googleSystemSource: $('#google-system-source'),
+  googleSystemError: $('#google-system-error'),
+  googleSystemSave: $('#google-system-save'),
   adminUserList: $('#admin-user-list'),
   adminUserDetail: $('#admin-user-detail'),
   adminUsersBack: $('#admin-users-back'),
@@ -179,6 +187,7 @@ document.addEventListener('click', () => {
 elements.adminPanelButton.addEventListener('click', openAdminPanel);
 elements.adminExit.addEventListener('click', showDashboard);
 elements.adminRefresh.addEventListener('click', loadAdminData);
+elements.googleSystemSettingsForm.addEventListener('submit', saveGoogleSystemSettings);
 elements.adminUsersBack.addEventListener('click', showAdminOverview);
 elements.managedSave.addEventListener('click', saveManagedUser);
 elements.managedSuspend.addEventListener('click', toggleManagedUserStatus);
@@ -394,9 +403,10 @@ function showAdminOverview() {
 
 async function loadAdminData() {
   try {
-    const [overview, users] = await Promise.all([
+    const [overview, users, settings] = await Promise.all([
       api('/api/admin/overview').then((response) => response.json()),
       api('/api/admin/users').then((response) => response.json()),
+      api('/api/admin/settings').then((response) => response.json()),
     ]);
     state.adminUsers = users.users;
     elements.adminUserCount.textContent = String(overview.users);
@@ -404,8 +414,48 @@ async function loadAdminData() {
     elements.adminFileCount.textContent = String(overview.files);
     elements.adminStorageUsed.textContent = formatBytes(overview.used);
     elements.adminConnectionCount.textContent = String(overview.connections);
+    renderGoogleSystemSettings(settings.google);
     renderAdminUsers();
   } catch (error) { handleApiError(error); }
+}
+
+function renderGoogleSystemSettings(settings) {
+  elements.googleSystemClientId.value = settings.clientId || '';
+  elements.googleSystemClientSecret.value = '';
+  elements.googleSystemRedirectUri.value = settings.redirectUri || '';
+  elements.googleSystemSecretStatus.textContent = settings.clientSecretConfigured
+    ? 'A secret is configured. Leave this empty to keep it.'
+    : 'No secret is configured yet.';
+  elements.googleSystemSource.textContent = settings.source === 'dashboard' ? 'Dashboard override' : 'Environment fallback';
+}
+
+async function saveGoogleSystemSettings(event) {
+  event.preventDefault();
+  elements.googleSystemError.hidden = true;
+  elements.googleSystemSave.disabled = true;
+  elements.googleSystemSave.textContent = 'Saving…';
+  try {
+    const response = await api('/api/admin/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        google: {
+          clientId: elements.googleSystemClientId.value.trim(),
+          clientSecret: elements.googleSystemClientSecret.value.trim(),
+          redirectUri: elements.googleSystemRedirectUri.value.trim(),
+        },
+      }),
+    });
+    const settings = await response.json();
+    renderGoogleSystemSettings(settings.google);
+    showToast('Google Drive settings saved');
+  } catch (error) {
+    elements.googleSystemError.textContent = error.message;
+    elements.googleSystemError.hidden = false;
+  } finally {
+    elements.googleSystemSave.disabled = false;
+    elements.googleSystemSave.textContent = 'Save Google settings';
+  }
 }
 
 function renderAdminUsers() {

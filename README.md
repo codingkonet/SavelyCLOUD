@@ -61,8 +61,10 @@ Google requires your own OAuth credentials for a locally hosted app:
 2. Configure the OAuth consent screen. While the app is in testing mode, add the Google accounts that may connect as test users.
 3. Create an OAuth client with application type **Web application**.
 4. Add this exact authorized redirect URI: `http://127.0.0.1:8787/api/connections/google/callback`.
-5. Copy `.env.example` to `.env`, fill in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and restart SavelyCLOUD.
-6. Sign in, open **Connected storage**, select **Google Drive**, and approve access on Google's page.
+5. Sign in with an administrator account, open **Admin panel** > **System settings**, and enter the client ID, client secret, and redirect URI. The change takes effect immediately; no `.env` edit or server restart is needed.
+6. Open **Connected storage**, select **Google Drive**, and approve access on Google's page.
+
+The dashboard values override `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` from the environment. The client secret is encrypted in `DATA_PATH/system-settings.json`, is masked in the dashboard, and is never returned by the API. Only administrators can read or change these settings. Environment variables remain available as a bootstrap or fallback configuration.
 
 After connecting, use **Settings** on the Google Drive card to rename it, refresh the displayed Google account information, or reconnect and switch the authorized Google account without creating a duplicate connection.
 
@@ -109,6 +111,8 @@ Set these environment variables before starting the server:
 | `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret. |
 | `GOOGLE_REDIRECT_URI` | local callback URL | Must exactly match the authorized redirect URI in Google Cloud. |
 
+Google OAuth values can also be managed at runtime from **Admin panel** > **System settings**. Dashboard values take precedence over this table's environment values.
+
 Example with a separate disk:
 
 ```powershell
@@ -143,6 +147,8 @@ The browser interface uses a compact HTTP API. Account sessions are carried in s
 - `GET /api/connections/:id/download?path=file` — download from connected storage
 - `POST /api/connections/:id/folders` — create a connected folder
 - `DELETE /api/connections/:id` — unlink a service without deleting its remote files
+- `GET /api/admin/settings` — read masked runtime integration settings (admin only)
+- `PATCH /api/admin/settings` — update encrypted runtime integration settings (admin only)
 - `GET /api/admin/overview` — instance-wide counts and storage usage (admin only)
 - `GET /api/admin/users` — user usage, quota, status, and connection counts (admin only)
 - `PATCH /api/admin/users/:id` — change role, status, or storage quota (admin only)
