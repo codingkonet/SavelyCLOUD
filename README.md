@@ -61,12 +61,22 @@ Google requires your own OAuth credentials for a locally hosted app:
 2. Configure the OAuth consent screen. While the app is in testing mode, add the Google accounts that may connect as test users.
 3. Create an OAuth client with application type **Web application**.
 4. Add this exact authorized redirect URI: `http://127.0.0.1:8787/api/connections/google/callback`.
-5. Copy `.env.example` to `.env`, fill in `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, and restart SavelyCLOUD.
-6. Sign in, open **Connected storage**, select **Google Drive**, and approve access on Google's page.
+5. Sign in with an administrator account, open **Admin panel** > **System settings**, and enter the client ID, client secret, and redirect URI. The change takes effect immediately; no `.env` edit or server restart is needed.
+6. Open **Connected storage**, select **Google Drive**, and approve access on Google's page.
+
+The dashboard values override `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` from the environment. The client secret is encrypted in `DATA_PATH/system-settings.json`, is masked in the dashboard, and is never returned by the API. Only administrators can read or change these settings. Environment variables remain available as a bootstrap or fallback configuration.
 
 After connecting, use **Settings** on the Google Drive card to rename it, refresh the displayed Google account information, or reconnect and switch the authorized Google account without creating a duplicate connection.
 
 SavelyCLOUD requests offline access so it can refresh short-lived access tokens. It requests the full Drive scope because its built-in browser manages existing files; Google classifies that scope as restricted and may require OAuth app verification if you publish the app beyond configured test users. See Google's [web-server OAuth guide](https://developers.google.com/identity/protocols/oauth2/web-server) and [Drive scope guidance](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
+
+## Plans and PayPal billing
+
+SavelyCLOUD includes a free plan and a paid plan. Signed-in users can see both plans in the dashboard and switch back to the free plan at any time. Paid plans use the PayPal Orders v2 checkout flow so the browser never handles PayPal secrets directly.
+
+Administrators can open **Admin panel** > **Billing** to edit the PayPal client ID, client secret, environment, and currency, then rename the free and paid plans, change their descriptions, set prices, toggle whether the paid plan is active or featured, and adjust storage limits.
+
+Billing settings are stored in `DATA_PATH/billing.json`, and pending PayPal checkout sessions are stored in `DATA_PATH/billing-checkouts.json`. The client secret is encrypted at rest and is never returned by the API.
 
 ## Connect Supabase Storage
 
@@ -108,6 +118,14 @@ Set these environment variables before starting the server:
 | `GOOGLE_CLIENT_ID` | empty | Google OAuth Web application client ID. |
 | `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret. |
 | `GOOGLE_REDIRECT_URI` | local callback URL | Must exactly match the authorized redirect URI in Google Cloud. |
+| `PAYPAL_CLIENT_ID` | empty | PayPal client ID used for paid-plan checkout. |
+| `PAYPAL_CLIENT_SECRET` | empty | PayPal client secret used for paid-plan checkout. |
+| `PAYPAL_ENVIRONMENT` | `sandbox` | PayPal API environment: `sandbox` or `live`. |
+| `PAYPAL_CURRENCY` | `USD` | Default currency for plans and checkout. |
+
+Google OAuth values can also be managed at runtime from **Admin panel** > **System settings**. Dashboard values take precedence over this table's environment values.
+
+PayPal values can also be managed at runtime from **Admin panel** > **Billing**. Dashboard values take precedence over the environment variables listed above.
 
 Example with a separate disk:
 
@@ -142,7 +160,16 @@ The browser interface uses a compact HTTP API. Account sessions are carried in s
 - `PUT /api/connections/:id/files?path=file` — upload to connected storage
 - `GET /api/connections/:id/download?path=file` — download from connected storage
 - `POST /api/connections/:id/folders` — create a connected folder
-- `DELETE /api/connections/:id` — unlink a service without deleting its remote files
+- `DELETE /api/connections/:id` ??? unlink a service without deleting its remote files
+- `GET /api/billing/plans` ??? list the current free and paid plans for the signed-in account
+- `POST /api/billing/plan` ??? switch the current account to the free plan
+- `POST /api/billing/paypal/create-order` ??? create a PayPal order for a paid plan
+- `GET /api/billing/paypal/return` ??? finish a PayPal checkout after approval
+- `GET /api/billing/paypal/cancel` ??? cancel a pending PayPal checkout — unlink a service without deleting its remote files
+- `GET /api/admin/settings` — read masked runtime integration settings (admin only)
+- `PATCH /api/admin/settings` ??? update encrypted runtime integration settings (admin only)
+- `GET /api/admin/billing` ??? read the current PayPal and plan settings (admin only)
+- `PATCH /api/admin/billing` ??? update PayPal and plan settings (admin only) — update encrypted runtime integration settings (admin only)
 - `GET /api/admin/overview` — instance-wide counts and storage usage (admin only)
 - `GET /api/admin/users` — user usage, quota, status, and connection counts (admin only)
 - `PATCH /api/admin/users/:id` — change role, status, or storage quota (admin only)

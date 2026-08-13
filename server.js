@@ -26,15 +26,23 @@ const STORAGE_ROOT = path.resolve(process.env.STORAGE_PATH || path.join(APP_ROOT
 const DATA_ROOT = path.resolve(process.env.DATA_PATH || path.join(APP_ROOT, '.local-cloud-data'));
 const USERS_ROOT = path.join(STORAGE_ROOT, 'accounts');
 const ACCOUNTS_FILE = path.join(DATA_ROOT, 'accounts.json');
+const BILLING_FILE = path.join(DATA_ROOT, 'billing.json');
+const BILLING_CHECKOUTS_FILE = path.join(DATA_ROOT, 'billing-checkouts.json');
 const CONNECTIONS_FILE = path.join(DATA_ROOT, 'connections.json');
 const ENCRYPTION_KEY_FILE = path.join(DATA_ROOT, 'encryption.key');
+const SYSTEM_SETTINGS_FILE = path.join(DATA_ROOT, 'system-settings.json');
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parsePort(process.env.PORT || '8787');
 const MAX_FILE_BYTES = parseSize(process.env.MAX_FILE_SIZE || '2GB');
 const MAX_STORAGE_BYTES = parseSize(process.env.MAX_STORAGE || '20GB');
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `http://127.0.0.1:${PORT}/api/connections/google/callback`;
+const ENV_GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const ENV_GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const ENV_GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `http://127.0.0.1:${PORT}/api/connections/google/callback`;
+const ENV_PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID || '';
+const ENV_PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET || '';
+const ENV_PAYPAL_ENVIRONMENT = process.env.PAYPAL_ENVIRONMENT || 'sandbox';
+const ENV_PAYPAL_CURRENCY = process.env.PAYPAL_CURRENCY || 'USD';
+const PAYPAL_API_BASE_URL = process.env.PAYPAL_API_BASE_URL || '';
 const GOOGLE_AUTH_URL = process.env.GOOGLE_AUTH_URL || 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
 const GOOGLE_DRIVE_API_URL = process.env.GOOGLE_DRIVE_API_URL || 'https://www.googleapis.com/drive/v3';
@@ -63,11 +71,15 @@ const MIME_TYPES = new Map([
 
 await mkdir(DATA_ROOT, { recursive: true });
 await mkdir(USERS_ROOT, { recursive: true });
+const encryptionKey = await loadEncryptionKey();
+let billingSettings = await loadBillingSettings();
+let billingCheckouts = await loadBillingCheckouts();
 let accounts = await loadAccounts();
 let connections = await loadConnections();
-const encryptionKey = await loadEncryptionKey();
+let systemSettings = await loadSystemSettings();
 const sessions = new Map();
 const googleOAuthStates = new Map();
+const paypalAccessTokens = new Map();
 
 const server = http.createServer(async (request, response) => {
   setSecurityHeaders(response);
@@ -79,6 +91,12 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/api/connections/google/callback') {
       return await finishGoogleOAuth(response, url);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/billing/paypal/return') {
+      return await finishPayPalCheckout(response, url);
+    }
+    if (request.method === 'GET' && url.pathname === '/api/billing/paypal/cancel') {
+      return finishPayPalCancel(response, url);
     }
 
     if (request.method === 'POST' && url.pathname === '/api/auth/register') {
@@ -109,13 +127,19 @@ const server = http.createServer(async (request, response) => {
           name: 'SavelyCLOUD',
           used,
           limit: userStorageLimit(user),
+          planId: user.planId || defaultPlanId(),
+          planName: getBillingPlan(user.planId || defaultPlanId())?.name || 'Free',
           maxFileSize: MAX_FILE_BYTES,
         });
       }
       if (url.pathname.startsWith('/api/admin/')) {
         requireAdmin(user);
+        if (request.method === 'GET' && url.pathname === '/api/admin/billing') return await adminBilling(response);
+        if (request.method === 'PATCH' && url.pathname === '/api/admin/billing') return await updateAdminBilling(request, response);
         if (request.method === 'GET' && url.pathname === '/api/admin/overview') return await adminOverview(response);
         if (request.method === 'GET' && url.pathname === '/api/admin/users') return await adminUsers(response);
+        if (request.method === 'GET' && url.pathname === '/api/admin/settings') return adminSystemSettings(response);
+        if (request.method === 'PATCH' && url.pathname === '/api/admin/settings') return await updateAdminSystemSettings(request, response);
         const adminUserRoute = /^\/api\/admin\/users\/([a-f0-9-]+)(?:\/(files|download))?$/.exec(url.pathname);
         if (adminUserRoute) {
           const targetUser = getAccount(adminUserRoute[1]);
@@ -129,6 +153,17 @@ const server = http.createServer(async (request, response) => {
           if (request.method === 'DELETE' && action === 'files') return await deleteItem(response, targetRoot, managedPath);
         }
         return json(response, 404, { error: 'Admin route not found.' });
+      }
+      if (request.method === 'GET' && url.pathname === '/api/billing/plans') {
+        return billingPlans(response, user);
+      }
+      if (request.method === 'POST' && url.pathname === '/api/billing/plan') {
+        verifySameOrigin(request);
+        return await setBillingPlan(request, response, user);
+      }
+      if (request.method === 'POST' && url.pathname === '/api/billing/paypal/create-order') {
+        verifySameOrigin(request);
+        return await createPayPalCheckout(request, response, url, user);
       }
       if (request.method === 'GET' && url.pathname === '/api/connections') {
         return json(response, 200, { connections: connections.filter((item) => item.userId === user.id).map(publicConnection) });
@@ -206,6 +241,8 @@ async function registerAccount(request, response) {
     passwordHash,
     role: accounts.length === 0 ? 'admin' : 'user',
     status: 'active',
+    planId: defaultPlanId(),
+    planUpdatedAt: new Date().toISOString(),
     storageLimit: null,
     createdAt: new Date().toISOString(),
   };
@@ -303,6 +340,233 @@ async function adminUsers(response) {
   return json(response, 200, { users: managedUsers });
 }
 
+function adminSystemSettings(response) {
+  const google = googleOAuthConfig();
+  return json(response, 200, {
+    google: {
+      clientId: google.clientId,
+      redirectUri: google.redirectUri,
+      clientSecretConfigured: Boolean(google.clientSecret),
+      source: systemSettings.google ? 'dashboard' : 'environment',
+    },
+  });
+}
+
+async function updateAdminSystemSettings(request, response) {
+  const body = await readJson(request);
+  if (!body.google || typeof body.google !== 'object' || Array.isArray(body.google)) {
+    throw httpError(400, 'Google Drive settings are required.');
+  }
+  const current = googleOAuthConfig();
+  const clientId = requireString(body.google.clientId, 'Google client ID', 500);
+  const redirectUri = validateGoogleRedirectUri(body.google.redirectUri);
+  const newSecret = typeof body.google.clientSecret === 'string' ? body.google.clientSecret.trim() : '';
+  const clientSecret = newSecret || current.clientSecret;
+  if (!clientSecret) throw httpError(400, 'Google client secret is required for the first dashboard configuration.');
+  const previousEncryptedSecret = systemSettings.google?.encryptedClientSecret;
+  systemSettings = {
+    ...systemSettings,
+    google: {
+      clientId,
+      redirectUri,
+      encryptedClientSecret: newSecret ? encryptSecret({ clientSecret }) : previousEncryptedSecret,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  await saveSystemSettings();
+  return adminSystemSettings(response);
+}
+
+function adminBilling(response) {
+  const paypal = paypalConfig();
+  return json(response, 200, {
+    paypal: {
+      clientId: paypal.clientId,
+      currency: paypal.currency,
+      environment: paypal.environment,
+      clientSecretConfigured: Boolean(paypal.clientSecret),
+      source: billingSettings.source === 'dashboard' ? 'dashboard' : 'environment',
+    },
+    plans: {
+      free: publicBillingPlan(getBillingPlan('free')),
+      paid: publicBillingPlan(getBillingPlan('paid')),
+    },
+  });
+}
+
+async function updateAdminBilling(request, response) {
+  const body = await readJson(request);
+  if (!body.paypal || typeof body.paypal !== 'object' || Array.isArray(body.paypal)) {
+    throw httpError(400, 'PayPal settings are required.');
+  }
+  if (!body.plans || typeof body.plans !== 'object' || Array.isArray(body.plans)) {
+    throw httpError(400, 'Plan settings are required.');
+  }
+
+  const current = paypalConfig();
+  const clientId = requireString(body.paypal.clientId, 'PayPal client ID', 500);
+  const environment = normalizePayPalEnvironment(body.paypal.environment);
+  const currency = normalizeCurrencyCode(body.paypal.currency || current.currency);
+  const newSecret = typeof body.paypal.clientSecret === 'string' ? body.paypal.clientSecret.trim() : '';
+  const clientSecret = newSecret || current.clientSecret;
+  if (!clientSecret) throw httpError(400, 'PayPal client secret is required for the first dashboard configuration.');
+
+  const freePlan = normalizeBillingPlan(body.plans.free, 'free', billingSettings.plans.free);
+  const paidPlan = normalizeBillingPlan(body.plans.paid, 'paid', billingSettings.plans.paid);
+  if (!freePlan.active) throw httpError(400, 'The free plan must stay active.');
+  if (freePlan.priceCents !== 0) throw httpError(400, 'The free plan price must be zero.');
+  if (paidPlan.priceCents <= 0) throw httpError(400, 'The paid plan must have a price greater than zero.');
+  if (paidPlan.storageLimitBytes <= freePlan.storageLimitBytes) {
+    throw httpError(400, 'The paid plan must allow more storage than the free plan.');
+  }
+
+  billingSettings = {
+    ...billingSettings,
+    source: 'dashboard',
+    paypal: {
+      clientId,
+      environment,
+      currency,
+      encryptedClientSecret: newSecret ? encryptSecret({ clientSecret }) : billingSettings.paypal?.encryptedClientSecret,
+      updatedAt: new Date().toISOString(),
+    },
+    plans: {
+      free: {
+        ...freePlan,
+        priceCents: 0,
+        currency,
+      },
+      paid: {
+        ...paidPlan,
+        currency,
+      },
+    },
+  };
+  await saveBillingSettings();
+  return adminBilling(response);
+}
+
+function billingPlans(response, user) {
+  const paypal = paypalConfig();
+  const currentPlan = getBillingPlan(user.planId || defaultPlanId());
+  return json(response, 200, {
+    paypalConfigured: Boolean(paypal.clientId && paypal.clientSecret),
+    currency: paypal.currency,
+    currentPlanId: currentPlan.id,
+    currentPlan: publicBillingPlan(currentPlan),
+    plans: listPublicBillingPlans(),
+  });
+}
+
+async function setBillingPlan(request, response, user) {
+  const body = await readJson(request);
+  const planId = typeof body.planId === 'string' ? body.planId.trim() : '';
+  const plan = getBillingPlan(planId);
+  if (plan.id !== 'free') throw httpError(402, 'Paid plans require PayPal checkout.');
+  user.planId = plan.id;
+  user.planUpdatedAt = new Date().toISOString();
+  await saveAccounts();
+  return json(response, 200, { user: publicUser(user), plan: publicBillingPlan(plan) });
+}
+
+async function createPayPalCheckout(request, response, url, user) {
+  const body = await readJson(request);
+  const planId = typeof body.planId === 'string' ? body.planId.trim() : '';
+  const plan = getBillingPlan(planId);
+  if (plan.id === 'free') throw httpError(400, 'Choose a paid plan to pay with PayPal.');
+  if (!plan.active) throw httpError(400, 'That plan is not active.');
+  const paypal = paypalConfig();
+  if (!paypal.clientId || !paypal.clientSecret) {
+    throw httpError(503, 'PayPal is not configured. An administrator can add the PayPal credentials in Admin panel > Billing.');
+  }
+
+  const state = crypto.randomBytes(24).toString('base64url');
+  const orderReturnBase = `${url.origin}/api/billing/paypal/return`;
+  const orderCancelBase = `${url.origin}/api/billing/paypal/cancel`;
+  const pending = {
+    state,
+    orderId: '',
+    userId: user.id,
+    planId: plan.id,
+    priceCents: plan.priceCents,
+    currency: paypal.currency,
+    createdAt: new Date().toISOString(),
+  };
+
+  const orderResponse = await fetch(`${paypalApiBaseUrl(paypal)}/v2/checkout/orders`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'PayPal-Request-Id': crypto.randomUUID(),
+      Authorization: `Bearer ${await paypalAccessTokenFor(paypal)}`,
+    },
+    body: JSON.stringify({
+      intent: 'CAPTURE',
+      purchase_units: [{
+        reference_id: plan.id,
+        description: plan.description || plan.name,
+        amount: {
+          currency_code: paypal.currency,
+          value: (plan.priceCents / 100).toFixed(2),
+        },
+      }],
+      payment_source: {
+        paypal: {
+          experience_context: {
+            user_action: 'PAY_NOW',
+            shipping_preference: 'NO_SHIPPING',
+            return_url: `${orderReturnBase}?state=${encodeURIComponent(state)}`,
+            cancel_url: `${orderCancelBase}?state=${encodeURIComponent(state)}`,
+          },
+        },
+      },
+    }),
+  });
+  if (!orderResponse.ok) throw await paypalApiError(orderResponse);
+  const order = await orderResponse.json();
+  pending.orderId = order.id;
+  billingCheckouts = billingCheckouts.filter((item) => item.state !== state).concat(pending);
+  await saveBillingCheckouts();
+  const approvalUrl = order.links?.find((link) => link.rel === 'payer-action' || link.rel === 'approve')?.href;
+  if (!approvalUrl) throw httpError(502, 'PayPal did not provide an approval link.');
+  return json(response, 200, { orderId: order.id, state, approvalUrl, plan: publicBillingPlan(plan) });
+}
+
+async function finishPayPalCheckout(response, url) {
+  const state = url.searchParams.get('state') || '';
+  const orderId = url.searchParams.get('token') || '';
+  const pending = billingCheckouts.find((item) => item.state === state && item.orderId === orderId);
+  if (!pending) return redirect(response, '/?billing=invalid');
+  const paypal = paypalConfig();
+  try {
+    const captureResponse = await fetch(`${paypalApiBaseUrl(paypal)}/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'PayPal-Request-Id': crypto.randomUUID(),
+        Authorization: `Bearer ${await paypalAccessTokenFor(paypal)}`,
+      },
+      body: '{}',
+    });
+    if (!captureResponse.ok) throw await paypalApiError(captureResponse);
+    const user = getAccount(pending.userId);
+    user.planId = pending.planId;
+    user.planUpdatedAt = new Date().toISOString();
+    billingCheckouts = billingCheckouts.filter((item) => item.state !== state);
+    await Promise.all([saveAccounts(), saveBillingCheckouts()]);
+    return redirect(response, `/?billing=success&plan=${encodeURIComponent(pending.planId)}`);
+  } catch (error) {
+    return redirect(response, `/?billing=error&message=${encodeURIComponent(error.message || 'PayPal checkout failed')}`);
+  }
+}
+
+function finishPayPalCancel(response, url) {
+  const state = url.searchParams.get('state') || '';
+  billingCheckouts = billingCheckouts.filter((item) => item.state !== state);
+  void saveBillingCheckouts();
+  return redirect(response, '/?billing=cancelled');
+}
+
 async function updateManagedUser(request, response, admin, targetUser) {
   const body = await readJson(request);
   if (body.status !== undefined) {
@@ -362,12 +626,14 @@ function revokeUserSessions(userId) {
 }
 
 function userStorageLimit(user) {
-  return Number.isSafeInteger(user.storageLimit) && user.storageLimit > 0 ? user.storageLimit : MAX_STORAGE_BYTES;
+  if (Number.isSafeInteger(user.storageLimit) && user.storageLimit > 0) return user.storageLimit;
+  return userBillingPlan(user)?.storageLimitBytes || MAX_STORAGE_BYTES;
 }
 
 function startGoogleOAuth(response, user, requestedName, replacementId = '') {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-    throw httpError(503, 'Google Drive is not configured. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then restart SavelyCLOUD.');
+  const googleConfig = googleOAuthConfig();
+  if (!googleConfig.clientId || !googleConfig.clientSecret) {
+    throw httpError(503, 'Google Drive is not configured. An administrator can add its OAuth credentials in Admin panel > System settings.');
   }
   const name = typeof requestedName === 'string' ? requestedName.trim() : '';
   if (name.length < 2 || name.length > 60) throw httpError(400, 'Connection name must be between 2 and 60 characters.');
@@ -379,11 +645,11 @@ function startGoogleOAuth(response, user, requestedName, replacementId = '') {
   const state = crypto.randomBytes(32).toString('base64url');
   const verifier = crypto.randomBytes(48).toString('base64url');
   const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-  googleOAuthStates.set(state, { userId: user.id, name, replacementId, verifier, expiresAt: Date.now() + 10 * 60 * 1000 });
+  googleOAuthStates.set(state, { userId: user.id, name, replacementId, verifier, googleConfig, expiresAt: Date.now() + 10 * 60 * 1000 });
   const authorizationUrl = new URL(GOOGLE_AUTH_URL);
   authorizationUrl.search = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: GOOGLE_REDIRECT_URI,
+    client_id: googleConfig.clientId,
+    redirect_uri: googleConfig.redirectUri,
     response_type: 'code',
     scope: GOOGLE_DRIVE_SCOPE,
     access_type: 'offline',
@@ -409,14 +675,15 @@ async function finishGoogleOAuth(response, url) {
   if (!user) return redirect(response, '/?google=account-unavailable');
 
   try {
+    const googleConfig = pending.googleConfig || googleOAuthConfig();
     const tokenResponse = await fetch(GOOGLE_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         code,
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        redirect_uri: GOOGLE_REDIRECT_URI,
+        client_id: googleConfig.clientId,
+        client_secret: googleConfig.clientSecret,
+        redirect_uri: googleConfig.redirectUri,
         grant_type: 'authorization_code',
         code_verifier: pending.verifier,
       }),
@@ -675,6 +942,243 @@ function publicConnection(connection) {
   return { id: connection.id, name: connection.name, provider: connection.provider, details, createdAt: connection.createdAt };
 }
 
+async function loadBillingSettings() {
+  try {
+    const data = JSON.parse(await readFile(BILLING_FILE, 'utf8'));
+    return normalizeBillingFile(data);
+  } catch (error) {
+    if (error.code === 'ENOENT') return defaultBillingSettings();
+    throw new Error(`Could not load billing settings: ${error.message}`);
+  }
+}
+
+async function saveBillingSettings() {
+  const tempFile = `${BILLING_FILE}.${crypto.randomUUID()}.tmp`;
+  await writeFile(tempFile, JSON.stringify({ version: 1, ...billingSettings }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await rename(tempFile, BILLING_FILE);
+}
+
+async function loadBillingCheckouts() {
+  try {
+    const data = JSON.parse(await readFile(BILLING_CHECKOUTS_FILE, 'utf8'));
+    return Array.isArray(data.checkouts) ? data.checkouts.filter((item) => item && typeof item === 'object') : [];
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw new Error(`Could not load billing checkouts: ${error.message}`);
+  }
+}
+
+async function saveBillingCheckouts() {
+  const tempFile = `${BILLING_CHECKOUTS_FILE}.${crypto.randomUUID()}.tmp`;
+  await writeFile(tempFile, JSON.stringify({ version: 1, checkouts: billingCheckouts }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await rename(tempFile, BILLING_CHECKOUTS_FILE);
+}
+
+function defaultBillingSettings() {
+  return {
+    version: 1,
+    source: 'environment',
+    paypal: {
+      clientId: ENV_PAYPAL_CLIENT_ID,
+      clientSecret: ENV_PAYPAL_CLIENT_SECRET ? encryptSecret({ clientSecret: ENV_PAYPAL_CLIENT_SECRET }) : null,
+      environment: ENV_PAYPAL_ENVIRONMENT,
+      currency: ENV_PAYPAL_CURRENCY,
+      updatedAt: new Date().toISOString(),
+    },
+    plans: {
+      free: {
+        id: 'free',
+        name: 'Free',
+        description: 'A simple local cloud for personal files.',
+        active: true,
+        featured: false,
+        priceCents: 0,
+        currency: ENV_PAYPAL_CURRENCY,
+        storageLimitBytes: MAX_STORAGE_BYTES,
+      },
+      paid: {
+        id: 'paid',
+        name: 'Pro',
+        description: 'Extra storage and paid plan features.',
+        active: true,
+        featured: true,
+        priceCents: 999,
+        currency: ENV_PAYPAL_CURRENCY,
+        storageLimitBytes: 100 * 1024 ** 3,
+      },
+    },
+  };
+}
+
+function normalizeBillingFile(data) {
+  const current = defaultBillingSettings();
+  const source = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  return {
+    version: 1,
+    source: source.source === 'dashboard' ? 'dashboard' : 'environment',
+    paypal: normalizeBillingPaypalSettings(source.paypal, current.paypal),
+    plans: {
+      free: normalizeBillingPlan(source.plans?.free, 'free', current.plans.free),
+      paid: normalizeBillingPlan(source.plans?.paid, 'paid', current.plans.paid),
+    },
+  };
+}
+
+function normalizeBillingPaypalSettings(value, fallback = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const environment = normalizePayPalEnvironment(source.environment || fallback.environment || ENV_PAYPAL_ENVIRONMENT);
+  return {
+    clientId: typeof source.clientId === 'string' ? source.clientId.trim() : (fallback.clientId || ENV_PAYPAL_CLIENT_ID),
+    clientSecret: source.encryptedClientSecret || fallback.clientSecret || null,
+    encryptedClientSecret: source.encryptedClientSecret || fallback.encryptedClientSecret || null,
+    environment,
+    currency: normalizeCurrencyCode(source.currency || fallback.currency || ENV_PAYPAL_CURRENCY),
+    updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : fallback.updatedAt || '',
+  };
+}
+
+function normalizeBillingPlan(value, id, fallback = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    id,
+    name: typeof source.name === 'string' ? source.name.trim() || fallback.name || id : fallback.name || id,
+    description: typeof source.description === 'string' ? source.description.trim() || fallback.description || '' : fallback.description || '',
+    active: source.active === undefined ? (fallback.active ?? true) : Boolean(source.active),
+    featured: source.featured === undefined ? Boolean(fallback.featured) : Boolean(source.featured),
+    priceCents: normalizePriceCents(source.priceCents ?? source.price ?? fallback.priceCents ?? 0),
+    currency: normalizeCurrencyCode(source.currency || fallback.currency || ENV_PAYPAL_CURRENCY),
+    storageLimitBytes: normalizeStorageLimitBytes(source.storageLimitBytes ?? source.storageLimit ?? fallback.storageLimitBytes ?? MAX_STORAGE_BYTES),
+  };
+}
+
+function publicBillingPlan(plan) {
+  return {
+    id: plan.id,
+    name: plan.name,
+    description: plan.description,
+    active: Boolean(plan.active),
+    featured: Boolean(plan.featured),
+    priceCents: Number(plan.priceCents || 0),
+    currency: normalizeCurrencyCode(plan.currency || ENV_PAYPAL_CURRENCY),
+    storageLimitBytes: Number(plan.storageLimitBytes || 0),
+  };
+}
+
+function listPublicBillingPlans() {
+  return ['free', 'paid'].map((id) => publicBillingPlan(getBillingPlan(id)));
+}
+
+function getBillingPlan(id) {
+  const planId = id === 'paid' ? 'paid' : 'free';
+  const fallback = defaultBillingSettings().plans[planId];
+  const source = billingSettings.plans?.[planId] || fallback;
+  return normalizeBillingPlan(source, planId, fallback);
+}
+
+function defaultPlanId() {
+  return 'free';
+}
+
+function userBillingPlan(user) {
+  return getBillingPlan(user.planId || defaultPlanId());
+}
+
+function normalizeCurrencyCode(value) {
+  const code = String(value || '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) throw httpError(400, 'Currency must be a three-letter ISO 4217 code.');
+  return code;
+}
+
+function normalizePayPalEnvironment(value) {
+  const environment = String(value || '').trim().toLowerCase();
+  if (!['sandbox', 'live'].includes(environment)) {
+    throw httpError(400, 'PayPal environment must be sandbox or live.');
+  }
+  return environment;
+}
+
+function normalizePriceCents(value) {
+  const cents = typeof value === 'number'
+    ? value
+    : Number.isFinite(Number(value))
+      ? Math.round(Number(value) * 100)
+      : NaN;
+  if (!Number.isSafeInteger(cents) || cents < 0 || cents > 100_000_000) {
+    throw httpError(400, 'Plan price must be a valid non-negative amount.');
+  }
+  return cents;
+}
+
+function normalizeStorageLimitBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isSafeInteger(bytes) || bytes < 1024 ** 2 || bytes > 1024 ** 5) {
+    throw httpError(400, 'Plan storage limit must be between 1 MB and 1 PB.');
+  }
+  return bytes;
+}
+
+function paypalConfig() {
+  const dashboard = billingSettings.paypal || {};
+  const clientSecretSource = dashboard.encryptedClientSecret || dashboard.clientSecret;
+  let clientSecret = ENV_PAYPAL_CLIENT_SECRET;
+  if (clientSecretSource) clientSecret = decryptSecret(clientSecretSource).clientSecret || '';
+  return {
+    clientId: dashboard.clientId || ENV_PAYPAL_CLIENT_ID,
+    clientSecret,
+    environment: dashboard.environment || ENV_PAYPAL_ENVIRONMENT,
+    currency: dashboard.currency || ENV_PAYPAL_CURRENCY,
+  };
+}
+
+function paypalApiBaseUrl(config = paypalConfig()) {
+  if (PAYPAL_API_BASE_URL) return PAYPAL_API_BASE_URL.replace(/\/$/, '');
+  return config.environment === 'live'
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com';
+}
+
+function paypalCheckoutReturnUrl(baseUrl, state) {
+  return `${baseUrl}/api/billing/paypal/return?state=${encodeURIComponent(state)}`;
+}
+
+function paypalCheckoutCancelUrl(baseUrl, state) {
+  return `${baseUrl}/api/billing/paypal/cancel?state=${encodeURIComponent(state)}`;
+}
+
+async function paypalAccessTokenFor(config = paypalConfig()) {
+  const cacheKey = `${paypalApiBaseUrl(config)}:${config.clientId}`;
+  const cached = paypalAccessTokens.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.accessToken;
+  const response = await fetch(`${paypalApiBaseUrl(config)}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`,
+    },
+    body: 'grant_type=client_credentials',
+  });
+  if (!response.ok) throw await paypalApiError(response);
+  const token = await response.json();
+  paypalAccessTokens.set(cacheKey, {
+    accessToken: token.access_token,
+    expiresAt: Date.now() + Number(token.expires_in || 0) * 1000,
+  });
+  return token.access_token;
+}
+
+async function paypalApiError(response) {
+  const body = await response.text();
+  let message = `PayPal request failed (${response.status})`;
+  try {
+    const parsed = JSON.parse(body);
+    message = parsed.error_description || parsed.message || parsed.error || message;
+  } catch {
+    if (body.trim()) message = body.trim();
+  }
+  return httpError(response.status >= 500 ? 502 : response.status, message);
+}
+
 async function loadConnections() {
   try {
     const data = JSON.parse(await readFile(CONNECTIONS_FILE, 'utf8'));
@@ -689,6 +1193,33 @@ async function saveConnections() {
   const tempFile = `${CONNECTIONS_FILE}.${crypto.randomUUID()}.tmp`;
   await writeFile(tempFile, JSON.stringify({ version: 1, connections }, null, 2), { encoding: 'utf8', mode: 0o600 });
   await rename(tempFile, CONNECTIONS_FILE);
+}
+
+async function loadSystemSettings() {
+  try {
+    const data = JSON.parse(await readFile(SYSTEM_SETTINGS_FILE, 'utf8'));
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw new Error(`Could not load system settings: ${error.message}`);
+  }
+}
+
+async function saveSystemSettings() {
+  const tempFile = `${SYSTEM_SETTINGS_FILE}.${crypto.randomUUID()}.tmp`;
+  await writeFile(tempFile, JSON.stringify({ version: 1, ...systemSettings }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await rename(tempFile, SYSTEM_SETTINGS_FILE);
+}
+
+function googleOAuthConfig() {
+  const dashboard = systemSettings.google || {};
+  let clientSecret = ENV_GOOGLE_CLIENT_SECRET;
+  if (dashboard.encryptedClientSecret) clientSecret = decryptSecret(dashboard.encryptedClientSecret).clientSecret || '';
+  return {
+    clientId: dashboard.clientId || ENV_GOOGLE_CLIENT_ID,
+    clientSecret,
+    redirectUri: dashboard.redirectUri || ENV_GOOGLE_REDIRECT_URI,
+  };
 }
 
 async function loadEncryptionKey() {
@@ -920,12 +1451,16 @@ async function googleDriveAccessToken(connection, forceRefresh = false) {
   const secret = decryptSecret(connection.encryptedSecret);
   if (!forceRefresh && secret.accessToken && Number(secret.expiresAt) > Date.now() + 60_000) return secret.accessToken;
   if (!secret.refreshToken) throw new Error('Google Drive authorization expired. Unlink and reconnect the service.');
+  const googleConfig = googleOAuthConfig();
+  if (!googleConfig.clientId || !googleConfig.clientSecret) {
+    throw httpError(503, 'Google Drive OAuth settings are missing. Ask an administrator to configure them in the Admin panel.');
+  }
   const refresh = await fetch(GOOGLE_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      client_secret: GOOGLE_CLIENT_SECRET,
+      client_id: googleConfig.clientId,
+      client_secret: googleConfig.clientSecret,
       refresh_token: secret.refreshToken,
       grant_type: 'refresh_token',
     }),
@@ -1046,6 +1581,22 @@ function normalizeProviderUrl(value, trailingSlash) {
   return url.toString().replace(/\/$/, trailingSlash ? '/' : '');
 }
 
+function validateGoogleRedirectUri(value) {
+  const raw = requireString(value, 'Google redirect URI', 2048);
+  let url;
+  try { url = new URL(raw); }
+  catch { throw httpError(400, 'Enter a valid Google redirect URI.'); }
+  const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && localHost)) {
+    throw httpError(400, 'Google redirect URI must use HTTPS, except for localhost development.');
+  }
+  if (url.username || url.password || url.search || url.hash) throw httpError(400, 'Google redirect URI cannot contain credentials, a query, or a fragment.');
+  if (url.pathname !== '/api/connections/google/callback') {
+    throw httpError(400, 'Google redirect URI must end with /api/connections/google/callback.');
+  }
+  return url.toString();
+}
+
 function supabaseStorageConfig(body, current = {}) {
   const projectRef = requireString(body.projectRef ?? current.projectRef, 'Supabase project reference', 80).toLowerCase();
   if (!/^[a-z0-9-]+$/.test(projectRef)) throw httpError(400, 'Supabase project reference contains invalid characters.');
@@ -1089,6 +1640,8 @@ async function loadAccounts() {
       ...account,
       role: account.role === 'admin' || account.role === 'user' ? account.role : (!hasAdmin && index === 0 ? 'admin' : 'user'),
       status: account.status === 'suspended' ? 'suspended' : 'active',
+      planId: account.planId === 'paid' ? 'paid' : 'free',
+      planUpdatedAt: typeof account.planUpdatedAt === 'string' ? account.planUpdatedAt : '',
       storageLimit: Number.isSafeInteger(account.storageLimit) ? account.storageLimit : null,
     }));
   } catch (error) {
@@ -1104,7 +1657,17 @@ async function saveAccounts() {
 }
 
 function publicUser(user) {
-  return { id: user.id, name: user.name, email: user.email, role: user.role || 'user', createdAt: user.createdAt };
+  const plan = userBillingPlan(user);
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role || 'user',
+    createdAt: user.createdAt,
+    planId: user.planId || defaultPlanId(),
+    planName: plan.name,
+    planUpdatedAt: user.planUpdatedAt || '',
+  };
 }
 
 function normalizeName(value) {

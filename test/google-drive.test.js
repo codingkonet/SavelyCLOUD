@@ -152,6 +152,84 @@ test('Google Drive OAuth uses state and PKCE, encrypts tokens, refreshes, and tr
   assert.equal(remove.status, 204);
 });
 
+test('administrators can securely configure Google OAuth from the dashboard', async (context) => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'savelycloud-settings-test-'));
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const appPort = await availablePort();
+  const callbackUrl = `http://127.0.0.1:${appPort}/api/connections/google/callback`;
+  const app = spawn(process.execPath, ['server.js'], {
+    cwd: path.resolve('.'),
+    env: {
+      ...process.env,
+      PORT: String(appPort),
+      DATA_PATH: path.join(tempRoot, 'data'),
+      STORAGE_PATH: path.join(tempRoot, 'storage'),
+      GOOGLE_CLIENT_ID: '',
+      GOOGLE_CLIENT_SECRET: '',
+      GOOGLE_REDIRECT_URI: callbackUrl,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  context.after(() => app.kill());
+  await waitForHealth(appPort, app);
+  const baseUrl = `http://127.0.0.1:${appPort}`;
+
+  const adminRegister = await fetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'System Admin', email: 'admin@example.test', password: 'testing-password' }),
+  });
+  const adminCookie = adminRegister.headers.get('set-cookie').split(';')[0];
+  const userRegister = await fetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Regular User', email: 'user@example.test', password: 'testing-password' }),
+  });
+  const userCookie = userRegister.headers.get('set-cookie').split(';')[0];
+
+  const denied = await fetch(`${baseUrl}/api/admin/settings`, { headers: { Cookie: userCookie } });
+  assert.equal(denied.status, 403, 'regular users must not read system credentials');
+  const initial = await fetch(`${baseUrl}/api/admin/settings`, { headers: { Cookie: adminCookie } });
+  assert.deepEqual(await initial.json(), {
+    google: { clientId: '', redirectUri: callbackUrl, clientSecretConfigured: false, source: 'environment' },
+  });
+
+  const saved = await fetch(`${baseUrl}/api/admin/settings`, {
+    method: 'PATCH',
+    headers: { Cookie: adminCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ google: {
+      clientId: 'dashboard-google-client.apps.googleusercontent.com',
+      clientSecret: 'dashboard-super-secret',
+      redirectUri: callbackUrl,
+    } }),
+  });
+  assert.equal(saved.status, 200);
+  const returnedSettings = await saved.json();
+  assert.equal(returnedSettings.google.clientSecretConfigured, true);
+  assert.equal(returnedSettings.google.source, 'dashboard');
+  assert.equal(JSON.stringify(returnedSettings).includes('dashboard-super-secret'), false, 'API must never return the client secret');
+
+  const settingsFile = await readFile(path.join(tempRoot, 'data', 'system-settings.json'), 'utf8');
+  assert.equal(settingsFile.includes('dashboard-super-secret'), false, 'client secret must be encrypted at rest');
+  assert.equal(settingsFile.includes('dashboard-google-client.apps.googleusercontent.com'), true);
+
+  const start = await fetch(`${baseUrl}/api/connections/google/start?name=Dashboard%20Drive`, { headers: { Cookie: adminCookie } });
+  assert.equal(start.status, 200);
+  const authorizationUrl = new URL((await start.json()).authorizationUrl);
+  assert.equal(authorizationUrl.searchParams.get('client_id'), 'dashboard-google-client.apps.googleusercontent.com');
+  assert.equal(authorizationUrl.searchParams.get('redirect_uri'), callbackUrl);
+
+  const retained = await fetch(`${baseUrl}/api/admin/settings`, {
+    method: 'PATCH',
+    headers: { Cookie: adminCookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ google: {
+      clientId: 'updated-dashboard-client.apps.googleusercontent.com',
+      clientSecret: '',
+      redirectUri: callbackUrl,
+    } }),
+  });
+  assert.equal(retained.status, 200, 'blank secret should retain the encrypted saved value');
+  assert.equal((await retained.json()).google.clientSecretConfigured, true);
+});
+
 function sendJson(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });

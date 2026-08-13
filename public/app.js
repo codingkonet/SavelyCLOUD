@@ -13,6 +13,12 @@ const state = {
   adminItems: [],
   googleSettingsConnection: null,
   supabaseSettingsConnection: null,
+  billingPlans: [],
+  billingCurrentPlanId: 'free',
+  billingCurrentPlan: null,
+  billingPaypalConfigured: false,
+  billingCurrency: 'USD',
+  billingAdmin: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -32,6 +38,36 @@ const elements = {
   adminFileCount: $('#admin-file-count'),
   adminStorageUsed: $('#admin-storage-used'),
   adminConnectionCount: $('#admin-connection-count'),
+  billingPanel: $('#billing-panel'),
+  billingCurrentPlan: $('#billing-current-plan'),
+  billingPlanList: $('#billing-plan-list'),
+  billingSettingsForm: $('#billing-settings-form'),
+  billingSettingsSource: $('#billing-settings-source'),
+  billingPaypalClientId: $('#billing-paypal-client-id'),
+  billingPaypalClientSecret: $('#billing-paypal-client-secret'),
+  billingPaypalSecretStatus: $('#billing-paypal-secret-status'),
+  billingPaypalEnvironment: $('#billing-paypal-environment'),
+  billingPaypalCurrency: $('#billing-paypal-currency'),
+  billingFreeActive: $('#billing-free-active'),
+  billingFreeName: $('#billing-free-name'),
+  billingFreeDescription: $('#billing-free-description'),
+  billingFreeStorage: $('#billing-free-storage'),
+  billingPaidActive: $('#billing-paid-active'),
+  billingPaidName: $('#billing-paid-name'),
+  billingPaidDescription: $('#billing-paid-description'),
+  billingPaidPrice: $('#billing-paid-price'),
+  billingPaidStorage: $('#billing-paid-storage'),
+  billingPaidFeatured: $('#billing-paid-featured'),
+  billingSettingsError: $('#billing-settings-error'),
+  billingSettingsSave: $('#billing-settings-save'),
+  googleSystemSettingsForm: $('#google-system-settings-form'),
+  googleSystemClientId: $('#google-system-client-id'),
+  googleSystemClientSecret: $('#google-system-client-secret'),
+  googleSystemRedirectUri: $('#google-system-redirect-uri'),
+  googleSystemSecretStatus: $('#google-system-secret-status'),
+  googleSystemSource: $('#google-system-source'),
+  googleSystemError: $('#google-system-error'),
+  googleSystemSave: $('#google-system-save'),
   adminUserList: $('#admin-user-list'),
   adminUserDetail: $('#admin-user-detail'),
   adminUsersBack: $('#admin-users-back'),
@@ -179,6 +215,8 @@ document.addEventListener('click', () => {
 elements.adminPanelButton.addEventListener('click', openAdminPanel);
 elements.adminExit.addEventListener('click', showDashboard);
 elements.adminRefresh.addEventListener('click', loadAdminData);
+elements.googleSystemSettingsForm.addEventListener('submit', saveGoogleSystemSettings);
+elements.billingSettingsForm.addEventListener('submit', saveBillingSettings);
 elements.adminUsersBack.addEventListener('click', showAdminOverview);
 elements.managedSave.addEventListener('click', saveManagedUser);
 elements.managedSuspend.addEventListener('click', toggleManagedUserStatus);
@@ -264,6 +302,20 @@ async function initialize() {
       else if (googleResult === 'denied') showToast('Google Drive connection was cancelled');
       else showToast(oauthReturn.get('message') || 'Google Drive could not be connected');
     }
+    const billingResult = oauthReturn.get('billing');
+    if (billingResult) {
+      history.replaceState({}, '', location.pathname);
+      if (billingResult === 'success') {
+        const plan = oauthReturn.get('plan');
+        showToast(plan ? ('Plan updated to ' + plan) : 'Billing updated');
+      } else if (billingResult === 'cancelled') {
+        showToast('PayPal checkout was cancelled');
+      } else if (billingResult === 'invalid') {
+        showToast('That billing session could not be found');
+      } else {
+        showToast(oauthReturn.get('message') || 'Billing could not be completed');
+      }
+    }
   }
 }
 
@@ -304,7 +356,7 @@ async function showDashboard() {
   elements.welcomeTitle.textContent = `${firstName(state.user.name)}’s files.`;
   document.title = `My files — SavelyCLOUD`;
   switchStorageView('local');
-  await Promise.all([loadStatus(), loadFiles('')]);
+  await Promise.all([loadStatus(), loadFiles(''), loadBillingData()]);
 }
 
 function openAuth(mode) {
@@ -394,9 +446,11 @@ function showAdminOverview() {
 
 async function loadAdminData() {
   try {
-    const [overview, users] = await Promise.all([
+    const [overview, users, settings, billing] = await Promise.all([
       api('/api/admin/overview').then((response) => response.json()),
       api('/api/admin/users').then((response) => response.json()),
+      api('/api/admin/settings').then((response) => response.json()),
+      api('/api/admin/billing').then((response) => response.json()),
     ]);
     state.adminUsers = users.users;
     elements.adminUserCount.textContent = String(overview.users);
@@ -404,9 +458,264 @@ async function loadAdminData() {
     elements.adminFileCount.textContent = String(overview.files);
     elements.adminStorageUsed.textContent = formatBytes(overview.used);
     elements.adminConnectionCount.textContent = String(overview.connections);
+    renderGoogleSystemSettings(settings.google);
+    renderAdminBillingSettings(billing);
     renderAdminUsers();
   } catch (error) { handleApiError(error); }
 }
+
+function renderGoogleSystemSettings(settings) {
+  elements.googleSystemClientId.value = settings.clientId || '';
+  elements.googleSystemClientSecret.value = '';
+  elements.googleSystemRedirectUri.value = settings.redirectUri || '';
+  elements.googleSystemSecretStatus.textContent = settings.clientSecretConfigured
+    ? 'A secret is configured. Leave this empty to keep it.'
+    : 'No secret is configured yet.';
+  elements.googleSystemSource.textContent = settings.source === 'dashboard' ? 'Dashboard override' : 'Environment fallback';
+}
+
+async function saveGoogleSystemSettings(event) {
+  event.preventDefault();
+  elements.googleSystemError.hidden = true;
+  elements.googleSystemSave.disabled = true;
+  elements.googleSystemSave.textContent = 'Saving…';
+  try {
+    const response = await api('/api/admin/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        google: {
+          clientId: elements.googleSystemClientId.value.trim(),
+          clientSecret: elements.googleSystemClientSecret.value.trim(),
+          redirectUri: elements.googleSystemRedirectUri.value.trim(),
+        },
+      }),
+    });
+    const settings = await response.json();
+    renderGoogleSystemSettings(settings.google);
+    showToast('Google Drive settings saved');
+  } catch (error) {
+    elements.googleSystemError.textContent = error.message;
+    elements.googleSystemError.hidden = false;
+  } finally {
+    elements.googleSystemSave.disabled = false;
+    elements.googleSystemSave.textContent = 'Save Google settings';
+  }
+}
+
+function renderAdminBillingSettings(billing) {
+  state.billingAdmin = billing;
+  const paypal = billing.paypal || {};
+  const freePlan = billing.plans?.free || {};
+  const paidPlan = billing.plans?.paid || {};
+  elements.billingPaypalClientId.value = paypal.clientId || '';
+  elements.billingPaypalClientSecret.value = '';
+  elements.billingPaypalSecretStatus.textContent = paypal.clientSecretConfigured
+    ? 'A secret is configured. Leave this empty to keep it.'
+    : 'No secret is configured yet.';
+  elements.billingSettingsSource.textContent = paypal.source === 'dashboard' ? 'Dashboard override' : 'Environment fallback';
+  elements.billingPaypalEnvironment.value = paypal.environment || 'sandbox';
+  elements.billingPaypalCurrency.value = paypal.currency || 'USD';
+  elements.billingFreeActive.checked = true;
+  elements.billingFreeActive.disabled = true;
+  elements.billingFreeName.value = freePlan.name || 'Free';
+  elements.billingFreeDescription.value = freePlan.description || '';
+  elements.billingFreeStorage.value = formatGigabytes(freePlan.storageLimitBytes);
+  elements.billingPaidActive.checked = Boolean(paidPlan.active);
+  elements.billingPaidName.value = paidPlan.name || 'Pro';
+  elements.billingPaidDescription.value = paidPlan.description || '';
+  elements.billingPaidPrice.value = formatCurrencyInput(paidPlan.priceCents);
+  elements.billingPaidStorage.value = formatGigabytes(paidPlan.storageLimitBytes);
+  elements.billingPaidFeatured.checked = Boolean(paidPlan.featured);
+  elements.billingSettingsError.hidden = true;
+}
+
+async function saveBillingSettings(event) {
+  event.preventDefault();
+  elements.billingSettingsError.hidden = true;
+  elements.billingSettingsSave.disabled = true;
+  elements.billingSettingsSave.textContent = 'Saving???';
+  try {
+    const currency = elements.billingPaypalCurrency.value.trim().toUpperCase();
+    const response = await api('/api/admin/billing', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        paypal: {
+          clientId: elements.billingPaypalClientId.value.trim(),
+          clientSecret: elements.billingPaypalClientSecret.value.trim(),
+          environment: elements.billingPaypalEnvironment.value,
+          currency,
+        },
+        plans: {
+          free: {
+            name: elements.billingFreeName.value.trim(),
+            description: elements.billingFreeDescription.value.trim(),
+            active: true,
+            featured: false,
+            priceCents: 0,
+            currency,
+            storageLimitBytes: parseGigabytes(elements.billingFreeStorage.value, 'Free plan storage limit'),
+          },
+          paid: {
+            name: elements.billingPaidName.value.trim(),
+            description: elements.billingPaidDescription.value.trim(),
+            active: elements.billingPaidActive.checked,
+            featured: elements.billingPaidFeatured.checked,
+            priceCents: parseCurrencyCents(elements.billingPaidPrice.value, 'Paid plan price'),
+            currency,
+            storageLimitBytes: parseGigabytes(elements.billingPaidStorage.value, 'Paid plan storage limit'),
+          },
+        },
+      }),
+    });
+    const billing = await response.json();
+    renderAdminBillingSettings(billing);
+    state.billingAdmin = billing;
+    showToast('Billing settings saved');
+    await loadBillingData();
+  } catch (error) {
+    elements.billingSettingsError.textContent = error.message;
+    elements.billingSettingsError.hidden = false;
+  } finally {
+    elements.billingSettingsSave.disabled = false;
+    elements.billingSettingsSave.textContent = 'Save billing settings';
+  }
+}
+
+async function loadBillingData() {
+  try {
+    const data = await (await api('/api/billing/plans')).json();
+    state.billingPlans = data.plans || [];
+    state.billingCurrentPlanId = data.currentPlanId || 'free';
+    state.billingCurrentPlan = data.currentPlan || null;
+    state.billingPaypalConfigured = Boolean(data.paypalConfigured);
+    state.billingCurrency = data.currency || 'USD';
+    if (state.user) state.user.planId = state.billingCurrentPlanId;
+    renderBillingPlans();
+  } catch (error) { handleApiError(error); }
+}
+
+function renderBillingPlans() {
+  const currentPlan = state.billingPlans.find((plan) => plan.id === state.billingCurrentPlanId) || state.billingCurrentPlan || state.billingPlans[0] || null;
+  elements.billingCurrentPlan.textContent = currentPlan ? (currentPlan.name + ' plan') : 'Free plan';
+  elements.billingPlanList.replaceChildren(...state.billingPlans.map((plan) => {
+    const card = document.createElement('article');
+    card.className = 'billing-plan-card';
+    if (plan.featured) card.classList.add('featured');
+    const head = document.createElement('div');
+    head.className = 'billing-plan-card-head';
+    const titleWrap = document.createElement('div');
+    const name = document.createElement('h3');
+    name.textContent = plan.name;
+    const price = document.createElement('strong');
+    price.textContent = plan.priceCents === 0 ? 'Free' : formatMoney(plan.priceCents, plan.currency || state.billingCurrency);
+    const subtitle = document.createElement('p');
+    subtitle.textContent = plan.description || '';
+    titleWrap.append(name, price, subtitle);
+    const badge = document.createElement('span');
+    badge.className = 'billing-badge';
+    badge.textContent = plan.id === state.billingCurrentPlanId ? 'Current plan' : (plan.featured ? 'Featured' : (plan.active ? 'Available' : 'Inactive'));
+    head.append(titleWrap, badge);
+    const details = document.createElement('ul');
+    details.className = 'billing-plan-details';
+    details.append(createBillingDetail('Storage', formatBytes(plan.storageLimitBytes)), createBillingDetail('Status', plan.active ? 'Active' : 'Inactive'), createBillingDetail('Plan ID', plan.id));
+    const actions = document.createElement('div');
+    actions.className = 'billing-plan-actions';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'button primary';
+    if (!plan.active) {
+      button.disabled = true;
+      button.textContent = 'Unavailable';
+    } else if (plan.id === state.billingCurrentPlanId) {
+      button.disabled = true;
+      button.textContent = 'Current plan';
+    } else if (plan.id === 'free') {
+      button.textContent = 'Switch to free';
+      button.addEventListener('click', () => chooseBillingPlan(plan.id));
+    } else if (!state.billingPaypalConfigured) {
+      button.disabled = true;
+      button.textContent = 'PayPal not configured';
+    } else {
+      button.textContent = 'Upgrade with PayPal';
+      button.addEventListener('click', () => chooseBillingPlan(plan.id));
+    }
+    actions.append(button);
+    card.append(head, details, actions);
+    return card;
+  }));
+}
+
+async function chooseBillingPlan(planId) {
+  const plan = state.billingPlans.find((item) => item.id === planId);
+  if (!plan || plan.id === state.billingCurrentPlanId) return;
+  if (plan.id === 'free') {
+    try {
+      const data = await (await api('/api/billing/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId }),
+      })).json();
+      state.user = data.user;
+      state.billingCurrentPlanId = data.plan.id;
+      state.billingCurrentPlan = data.plan;
+      await loadStatus();
+      renderBillingPlans();
+      showToast('Switched to the free plan');
+    } catch (error) { handleApiError(error); }
+    return;
+  }
+  if (!state.billingPaypalConfigured) {
+    showToast('PayPal is not configured yet');
+    return;
+  }
+  try {
+    const data = await (await api('/api/billing/paypal/create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planId }),
+    })).json();
+    location.href = data.approvalUrl;
+  } catch (error) { handleApiError(error); }
+}
+
+function createBillingDetail(label, value) {
+  const item = document.createElement('li');
+  const strong = document.createElement('strong');
+  strong.textContent = label;
+  const span = document.createElement('span');
+  span.textContent = value;
+  item.append(strong, span);
+  return item;
+}
+
+function formatCurrencyInput(cents) {
+  return Number.isFinite(Number(cents)) ? (Number(cents) / 100).toFixed(Number(cents) % 100 === 0 ? 0 : 2) : '';
+}
+
+function formatMoney(cents, currency) {
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD' }).format((Number(cents) || 0) / 100);
+}
+
+function formatGigabytes(bytes) {
+  const gigabytes = Number(bytes) / 1024 ** 3;
+  if (!Number.isFinite(gigabytes) || gigabytes <= 0) return '';
+  return Number.isInteger(gigabytes) ? String(gigabytes) : gigabytes.toFixed(1).replace(/\.0$/, '');
+}
+
+function parseGigabytes(value, label) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error(label + ' must be greater than zero.');
+  return Math.round(amount * 1024 ** 3);
+}
+
+function parseCurrencyCents(value, label) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error(label + ' must be a valid amount.');
+  return Math.round(amount * 100);
+}
+
 
 function renderAdminUsers() {
   elements.adminUserList.replaceChildren(...state.adminUsers.map((user) => {
@@ -422,10 +731,12 @@ function renderAdminUsers() {
     name.textContent = user.name;
     const email = document.createElement('small');
     email.textContent = user.email;
+    const plan = document.createElement('small');
+    plan.textContent = 'Plan: ' + (user.planName || user.planId || 'Free');
     const role = document.createElement('span');
     role.className = `role-pill ${user.role}`;
     role.textContent = user.role;
-    identity.append(name, email, role);
+    identity.append(name, email, plan, role);
     info.append(avatar, identity);
     const usage = document.createElement('div');
     usage.className = 'user-usage';
