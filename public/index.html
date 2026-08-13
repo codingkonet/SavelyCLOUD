@@ -85,6 +85,19 @@
           </div>
         </div>
 
+
+        <section class="billing-panel" id="billing-panel">
+          <div class="billing-head">
+            <div>
+              <p class="eyebrow">Plans</p>
+              <h2>Choose your storage plan</h2>
+              <p>Start free and upgrade later with PayPal when you need more room.</p>
+            </div>
+            <div class="billing-current-plan" id="billing-current-plan">Loading plan?</div>
+          </div>
+          <div class="billing-grid" id="billing-plan-list"></div>
+        </section>
+
         <nav class="storage-nav" aria-label="Storage location">
           <button class="storage-tab active" id="local-storage-tab" type="button"><span aria-hidden="true">⌂</span> Local files</button>
           <button class="storage-tab" id="connected-storage-tab" type="button"><span aria-hidden="true">↗</span> Connected storage</button>
@@ -181,6 +194,45 @@
               <div class="system-settings-actions"><button class="button primary" id="google-system-save" type="submit">Save Google settings</button></div>
             </form>
           </section>
+
+
+          <section class="admin-card billing-settings-card">
+            <div class="admin-card-head">
+              <div><h2>Billing</h2><p>Configure PayPal and edit the free and paid plans.</p></div>
+              <span class="settings-source" id="billing-settings-source">Loading?</span>
+            </div>
+            <form class="billing-settings-form" id="billing-settings-form">
+              <div class="billing-settings-grid">
+                <label>PayPal client ID<input id="billing-paypal-client-id" type="text" maxlength="500" autocomplete="off" required></label>
+                <label>PayPal client secret<input id="billing-paypal-client-secret" type="password" maxlength="500" autocomplete="new-password" placeholder="Leave empty to keep the saved secret"><small id="billing-paypal-secret-status">Checking saved secret?</small></label>
+                <label>PayPal environment<select id="billing-paypal-environment"><option value="sandbox">Sandbox</option><option value="live">Live</option></select></label>
+                <label>Currency<input id="billing-paypal-currency" type="text" maxlength="3" autocomplete="off" required placeholder="USD"></label>
+              </div>
+              <div class="billing-plan-editor">
+                <article class="billing-plan-editor-card">
+                  <div class="billing-plan-editor-head"><div><h3>Free plan</h3><p>Always available to every account.</p></div><label class="billing-flag"><input id="billing-free-active" type="checkbox" checked> Active</label></div>
+                  <div class="billing-plan-fields">
+                    <label>Name<input id="billing-free-name" type="text" maxlength="120" required></label>
+                    <label>Description<textarea id="billing-free-description" rows="3" maxlength="280" required></textarea></label>
+                    <label>Storage limit (GB)<input id="billing-free-storage" type="number" min="0.001" max="1048576" step="0.1" required></label>
+                  </div>
+                </article>
+                <article class="billing-plan-editor-card">
+                  <div class="billing-plan-editor-head"><div><h3>Paid plan</h3><p>The plan customers can buy with PayPal.</p></div><label class="billing-flag"><input id="billing-paid-active" type="checkbox" checked> Active</label></div>
+                  <div class="billing-plan-fields">
+                    <label>Name<input id="billing-paid-name" type="text" maxlength="120" required></label>
+                    <label>Description<textarea id="billing-paid-description" rows="3" maxlength="280" required></textarea></label>
+                    <label>Price (USD)<input id="billing-paid-price" type="number" min="0.01" max="1000000" step="0.01" required></label>
+                    <label>Storage limit (GB)<input id="billing-paid-storage" type="number" min="0.001" max="1048576" step="0.1" required></label>
+                    <label class="billing-flag wide"><input id="billing-paid-featured" type="checkbox" checked> Featured plan</label>
+                  </div>
+                </article>
+              </div>
+              <p class="form-error" id="billing-settings-error" hidden></p>
+              <div class="system-settings-actions"><button class="button primary" id="billing-settings-save" type="submit">Save billing settings</button></div>
+            </form>
+          </section>
+
           <section class="admin-card">
             <div class="admin-card-head"><div><h2>User accounts</h2><p>Review usage and manage access.</p></div><button class="button ghost" id="admin-refresh" type="button">Refresh</button></div>
             <div class="admin-user-table">
