@@ -83,6 +83,7 @@ const elements = {
   authForm: $('#auth-form'),
   authName: $('#auth-name'),
   authPassword: $('#auth-password'),
+  authPlan: $('#auth-plan'),
   authSubmit: $('#auth-submit'),
   authSubtitle: $('#auth-subtitle'),
   authSwitch: $('#auth-switch'),
@@ -378,6 +379,8 @@ function setAuthMode(mode) {
   elements.authSwitch.textContent = registering ? 'Sign in' : 'Create an account';
   elements.authName.closest('label').hidden = !registering;
   elements.authName.required = registering;
+  elements.authPlan.closest('label').hidden = !registering;
+  elements.authPlan.disabled = !registering;
   elements.authPassword.autocomplete = registering ? 'new-password' : 'current-password';
   elements.authError.hidden = true;
 }
@@ -392,7 +395,10 @@ async function submitAuth(event) {
       email: elements.authEmail.value,
       password: elements.authPassword.value,
     };
-    if (state.authMode === 'register') payload.name = elements.authName.value;
+    if (state.authMode === 'register') {
+      payload.name = elements.authName.value;
+      payload.planId = elements.authPlan.value;
+    }
     const data = await (await api(`/api/auth/${state.authMode}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -7,6 +7,47 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+test('signup can choose a plan before checkout', async (context) => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'savelycloud-signup-plan-test-'));
+  context.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const appPort = await availablePort();
+  const app = spawn(process.execPath, ['server.js'], {
+    cwd: path.resolve('.'),
+    env: {
+      ...process.env,
+      PORT: String(appPort),
+      DATA_PATH: path.join(tempRoot, 'data'),
+      STORAGE_PATH: path.join(tempRoot, 'storage'),
+      PAYPAL_CLIENT_ID: 'env-client',
+      PAYPAL_CLIENT_SECRET: 'env-secret',
+      PAYPAL_ENVIRONMENT: 'sandbox',
+      GOOGLE_CLIENT_ID: '',
+      GOOGLE_CLIENT_SECRET: '',
+      GOOGLE_REDIRECT_URI: `http://127.0.0.1:${appPort}/api/connections/google/callback`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  context.after(() => app.kill());
+  await waitForHealth(appPort, app);
+  const baseUrl = `http://127.0.0.1:${appPort}`;
+
+  const response = await fetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Pro User',
+      email: 'pro@example.test',
+      password: 'testing-password',
+      planId: 'paid',
+    }),
+  });
+
+  assert.equal(response.status, 201);
+  const payload = await response.json();
+  assert.equal(payload.user.planId, 'paid');
+  assert.equal(payload.user.planName, 'Pro');
+});
+
 test('billing plans can be edited from admin and purchased with PayPal', async (context) => {
   let tokenAuth = '';
   let orderBody = null;

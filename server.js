@@ -227,6 +227,9 @@ async function registerAccount(request, response) {
   const name = normalizeName(body.name);
   const email = normalizeEmail(body.email);
   const password = validatePassword(body.password);
+  const requestedPlanId = typeof body.planId === 'string' ? body.planId.trim().toLowerCase() : defaultPlanId();
+  const plan = getBillingPlan(requestedPlanId === 'paid' || requestedPlanId === 'free' ? requestedPlanId : defaultPlanId());
+  if (!plan.active) throw httpError(400, 'The selected plan is not available.');
   if (accounts.some((account) => account.email === email)) {
     throw httpError(409, 'An account with that email already exists.');
   }
@@ -241,7 +244,7 @@ async function registerAccount(request, response) {
     passwordHash,
     role: accounts.length === 0 ? 'admin' : 'user',
     status: 'active',
-    planId: defaultPlanId(),
+    planId: plan.id,
     planUpdatedAt: new Date().toISOString(),
     storageLimit: null,
     createdAt: new Date().toISOString(),
